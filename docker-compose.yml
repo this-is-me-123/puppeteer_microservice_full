@@ -1,0 +1,15 @@
+version: '3'
+
+services:
+  backend:
+    build: ./backend
+    volumes:
+      - ./backend/logs.db:/app/logs.db
+    ports:
+      - "3001:3001"
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "3000:80"
+# test
