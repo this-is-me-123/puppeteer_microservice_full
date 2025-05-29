@@ -1,10 +1,18 @@
 import express from "express";
-import cors from "cors";
 import apiRoutes from "./routes/api.js";
 
 const app = express();
-app.use(cors());
+const PORT = process.env.PORT || 3000;
+
 app.use(express.json());
 app.use("/api", apiRoutes);
 
-app.listen(3001, () => console.log("🚀 Backend running on http://localhost:3001"));
+// Global error handler
+app.use((err, req, res, next) => {
+  console.error(err);
+  res.status(500).json({ error: "Internal server error" });
+});
+
+app.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
+});

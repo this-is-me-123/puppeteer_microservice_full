@@ -1,8 +1,9 @@
-import sqlite3 from "sqlite3";
+import initSqlJs from "sql.js";
+import fs from "fs";
 import path, { dirname } from "path";
 import { fileURLToPath } from "url";
 
-// Derive __dirname from import.meta.url
+// Derive __dirname
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
@@ -11,79 +12,91 @@ const defaultDbFile = process.env.DB_FILE
   ? path.resolve(__dirname, process.env.DB_FILE)
   : path.resolve(__dirname, "jobs.sqlite");
 
-/**
- * Opens a SQLite3 database connection.
- * @param {string} [customPath] - Optional path to the SQLite file.
- * @returns {sqlite3.Database} - A Database instance.
- * @throws {Error} If opening the database fails.
- */
-export function createDbConnection(customPath) {
-  const dbFile = customPath || defaultDbFile;
-  const db = new sqlite3.Database(dbFile, (err) => {
-    if (err) {
-      console.error(`Failed to open database at ${dbFile}:`, err);
-      throw err;
-    }
-  });
-  return db;
-}
+let SQL;       // sql.js module
+let dbInstance;
 
 /**
- * Close a SQLite3 database connection.
- * @param {sqlite3.Database} db - The database instance to close.
+ * Initialize and return the SQL.js Database in WASM.
+ * Uses sql.js (WebAssembly) to avoid native binaries.
+ * @param {string} [customPath] - Optional path to the SQLite file.
+ * @returns {Promise<SQL.Database>} The database instance.
  */
-export function closeDbConnection(db) {
-  if (db) {
-    db.close((err) => {
-      if (err) console.error("Error closing the database:", err);
+export async function createDbConnection(customPath) {
+  const dbFile = customPath || defaultDbFile;
+  if (!SQL) {
+    SQL = await initSqlJs({
+      locateFile: file => `./node_modules/sql.js/dist/${file}`
     });
   }
+
+  let filebuffer = new Uint8Array();
+  if (fs.existsSync(dbFile)) {
+    filebuffer = fs.readFileSync(dbFile);
+  }
+
+  dbInstance = new SQL.Database(filebuffer);
+  return dbInstance;
 }
 
 /**
- * Runs a SQL command (INSERT/UPDATE/DELETE) and returns a promise.
- * @param {sqlite3.Database} db - The database instance.
- * @param {string} sql - The SQL statement.
- * @param {any[]} [params] - Optional parameters for the statement.
- * @returns {Promise<sqlite3.RunResult>} Resolves with result metadata.
+ * Persist the in-memory database back to disk.
+ * @param {string} [customPath] - Optional output path.
  */
-export function runAsync(db, sql, params = []) {
-  return new Promise((resolve, reject) => {
-    db.run(sql, params, function (err) {
-      if (err) return reject(err);
-      resolve(this); // contains lastID, changes
-    });
-  });
+export function saveDb(customPath) {
+  if (!dbInstance) return;
+  const data = dbInstance.export();
+  const outFile = customPath || defaultDbFile;
+  fs.writeFileSync(outFile, Buffer.from(data));
 }
 
 /**
- * Retrieves a single row and returns a promise.
- * @param {sqlite3.Database} db - The database instance.
- * @param {string} sql - The SQL statement.
- * @param {any[]} [params] - Optional parameters for the statement.
- * @returns {Promise<any>} Resolves with the row or undefined.
+ * Close the database (noop for SQL.js but calls save).
  */
-export function getAsync(db, sql, params = []) {
-  return new Promise((resolve, reject) => {
-    db.get(sql, params, (err, row) => {
-      if (err) return reject(err);
-      resolve(row);
-    });
-  });
+export function closeDbConnection() {
+  saveDb();
+  dbInstance = null;
 }
 
 /**
- * Retrieves all matching rows and returns a promise.
- * @param {sqlite3.Database} db - The database instance.
- * @param {string} sql - The SQL statement.
- * @param {any[]} [params] - Optional parameters for the statement.
- * @returns {Promise<any[]>} Resolves with an array of rows.
+ * Execute a statement and return all rows.
+ * @param {string} sql - SQL query.
+ * @param {any[]} [params] - Parameters.
+ * @returns {any[]} - Result rows.
  */
-export function allAsync(db, sql, params = []) {
-  return new Promise((resolve, reject) => {
-    db.all(sql, params, (err, rows) => {
-      if (err) return reject(err);
-      resolve(rows);
-    });
-  });
+export function allAsync(sql, params = []) {
+  const stmt = dbInstance.prepare(sql);
+  stmt.bind(params);
+  const result = [];
+  while (stmt.step()) {
+    result.push(stmt.getAsObject());
+  }
+  stmt.free();
+  return result;
+}
+
+/**
+ * Execute a statement and return single row.
+ * @param {string} sql - SQL query.
+ * @param {any[]} [params] - Parameters.
+ * @returns {any} - A single row or undefined.
+ */
+export function getAsync(sql, params = []) {
+  const stmt = dbInstance.prepare(sql);
+  stmt.bind(params);
+  const row = stmt.step() ? stmt.getAsObject() : undefined;
+  stmt.free();
+  return row;
+}
+
+/**
+ * Run a statement (INSERT/UPDATE/DELETE).
+ * @param {string} sql - SQL statement.
+ * @param {any[]} [params] - Parameters.
+ */
+export function runAsync(sql, params = []) {
+  const stmt = dbInstance.prepare(sql);
+  stmt.bind(params);
+  stmt.step();
+  stmt.free();
+  saveDb();
 }

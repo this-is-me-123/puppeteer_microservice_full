@@ -1,94 +1,115 @@
 import express from "express";
-import { createDbConnection } from "../db/db.js";  // corrected path to db.js
+import {
+  createDbConnection,
+  allAsync,
+  getAsync,
+  runAsync,
+  closeDbConnection
+} from "../db/db.js";
 import { v4 as uuidv4 } from "uuid";
 
-// Initialize database connection via factory
-const db = createDbConnection();
-
 const router = express.Router();
+let db;
+
+// Initialize SQL.js connection at startup
+(async () => {
+  try {
+    db = await createDbConnection();
+  } catch (err) {
+    console.error("Failed to initialize database:", err);
+    process.exit(1);
+  }
+})();
 
 // List all jobs with pagination
-router.get("/queue", (req, res) => {
-  const limit = Math.min(parseInt(req.query.limit, 10) || 50, 100);
-  const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
-  const offset = (page - 1) * limit;
+router.get("/queue", async (req, res, next) => {
+  try {
+    const limit = Math.min(parseInt(req.query.limit, 10) || 50, 100);
+    const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
+    const offset = (page - 1) * limit;
 
-  const total = db.prepare(
-    `SELECT COUNT(*) as count FROM jobs`
-  ).get().count;
+    const totalRow = getAsync(
+      "SELECT COUNT(*) as count FROM jobs"
+    );
+    const total = totalRow ? totalRow.count : 0;
 
-  const rows = db.prepare(
-    `SELECT id, folder, status, created_at, updated_at
-     FROM jobs
-     ORDER BY created_at DESC
-     LIMIT ? OFFSET ?`
-  ).all(limit, offset);
+    const data = allAsync(
+      `SELECT id, folder, status, created_at, updated_at
+       FROM jobs ORDER BY created_at DESC LIMIT ? OFFSET ?`,
+      [limit, offset]
+    );
 
-  res.json({
-    page,
-    limit,
-    total,
-    totalPages: Math.ceil(total / limit),
-    data: rows
-  });
+    res.json({ page, limit, total, totalPages: Math.ceil(total / limit), data });
+  } catch (err) {
+    next(err);
+  }
 });
 
 // Get single job details
-router.get("/queue/:id", (req, res) => {
-  const job = db
-    .prepare(`SELECT * FROM jobs WHERE id = ?`)
-    .get(req.params.id);
-  if (!job) return res.status(404).json({ error: "Not found" });
-
+router.get("/queue/:id", (req, res, next) => {
   try {
-    job.result = job.result ? JSON.parse(job.result) : {};
+    const job = getAsync(
+      "SELECT * FROM jobs WHERE id = ?",
+      [req.params.id]
+    );
+    if (!job) return res.status(404).json({ error: "Not found" });
+    try {
+      job.result = job.result ? JSON.parse(job.result) : {};
+    } catch (_) {
+      job.result = {};
+    }
+    res.json(job);
   } catch (err) {
-    console.error(`Failed to parse job.result for ID ${job.id}:`, err);
-    job.result = {};
+    next(err);
   }
-
-  res.json(job);
 });
 
-// Shared helper to insert a new job
-function enqueueJob(folder) {
-  const id = uuidv4();
-  db.prepare(
-    `INSERT INTO jobs (id, folder, status) VALUES (?, ?, 'queued')`
-  ).run(id, folder);
-  return id;
-}
-
 // Enqueue a new job
-router.post("/queue", (req, res) => {
-  let { folder } = req.body;
-
-  if (typeof folder !== 'string') {
-    return res.status(400).json({ error: "Folder must be a string" });
-  }
-  folder = folder.trim();
-  if (!folder) {
-    return res.status(400).json({ error: "Folder cannot be empty" });
-  }
-
-  const sanitized = folder.replace(/[^a-zA-Z0-9_\-\/]/g, '');
-  if (sanitized !== folder) {
-    return res.status(400).json({ error: "Folder contains invalid characters" });
-  }
-
-  const id = enqueueJob(sanitized);
-  res.status(201).json({ id, folder: sanitized, status: "queued" });
+router.post("/queue", (req, res, next) => {
+  (async () => {
+    try {
+      const { folder } = req.body;
+      const id = uuidv4();
+      await runAsync(
+        "INSERT INTO jobs (id, folder, status) VALUES (?, ?, 'queued')",
+        [id, folder]
+      );
+      res.status(201).json({ id, folder, status: "queued" });
+    } catch (err) {
+      next(err);
+    }
+  })();
 });
 
 // Retry a failed job
-router.post("/queue/:id/retry", (req, res) => {
-  const old = db
-    .prepare(`SELECT folder FROM jobs WHERE id = ? AND status = 'failed'`)
-    .get(req.params.id);
-  if (!old) return res.status(404).json({ error: "Not found or not failed" });
+router.post("/queue/:id/retry", (req, res, next) => {
+  (async () => {
+    try {
+      const old = getAsync(
+        "SELECT folder FROM jobs WHERE id = ? AND status = 'failed'",
+        [req.params.id]
+      );
+      if (!old) return res.status(404).json({ error: "Not found or not failed" });
+      const id = uuidv4();
+      await runAsync(
+        "INSERT INTO jobs (id, folder, status) VALUES (?, ?, 'queued')",
+        [id, old.folder]
+      );
+      res.json({ id, folder: old.folder, status: "queued" });
+    } catch (err) {
+      next(err);
+    }
+  })();
+});
 
-  const id = enqueueJob(old.folder);
-  res.json({ id, folder: old.folder, status: "queued" });
+// Graceful shutdown
+process.on('SIGINT', () => {
+  closeDbConnection();
+  process.exit();
+});
+process.on('SIGTERM', () => {
+  closeDbConnection();
+  process.exit();
 });
 
 export default router;

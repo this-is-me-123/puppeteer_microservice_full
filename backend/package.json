@@ -1,4 +1,5 @@
 {
+{
   "name": "onlyfans-login-bot-backend",
   "type": "module",
   "version": "1.0.0",
@@ -18,7 +19,7 @@
     "puppeteer-extra": "^3.3.4",
     "puppeteer-extra-plugin-stealth": "^2.11.1",
     "set-interval-async": "^2.0.1",
-    "sqlite3": "^5.1.7",
+    "sql.js": "^1.8.0",
     "uuid": "^11.1.0"
   }
 }
