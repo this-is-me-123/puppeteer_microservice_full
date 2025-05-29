@@ -1,12 +1,16 @@
 import fs from "fs";
-import path from "path";
-import Database from "better-sqlite3";
+import { createDbConnection, runAsync, closeDbConnection } from "./db/db.js";
 
-const dbPath = path.resolve("logs.db");
-const schemaPath = path.resolve("db/schema-jobs.sql");
-
-const db = new Database(dbPath);
-const sql = fs.readFileSync(schemaPath, "utf-8");
-
-db.exec(sql);
-console.log("✅ jobs table created or already existed in", dbPath);
+(async () => {
+  const db = await createDbConnection();
+  const schema = fs.readFileSync("schema.sql", "utf8");
+  // split into statements if needed
+  for (const stmt of schema.split(";").map(s => s.trim()).filter(Boolean)) {
+    await runAsync(stmt);
+  }
+  closeDbConnection();
+  console.log("Schema applied successfully");
+})().catch(err => {
+  console.error("Failed to apply schema:", err);
+  process.exit(1);
+});
