@@ -17,6 +17,8 @@ export default function App() {
         <Link to="/dashboard" className="text-blue-600 hover:underline">Dashboard</Link>
         <Link to="/tasks" className="text-blue-600 hover:underline">Tasks</Link>
         <Link to="/login" className="text-blue-600 hover:underline ml-auto">Login</Link>
+        <Link to="/tasks">Tasks</Link>
+        <Link to="/schedules">Schedules</Link>
       </header>
 
       <main className="max-w-4xl mx-auto p-4">
@@ -26,6 +28,7 @@ export default function App() {
           <Route path="/dashboard" element={<Dashboard />} />
           <Route path="/tasks" element={<Tasks />} />
           <Route path="*" element={<Navigate to="/dashboard" replace />} />
+	  <Route path="/schedules" element={<Schedules />} />
         </Routes>
       </main>
     </Router>
