@@ -1,1 +1,1 @@
-export default function Dashboard() { return <div className="p-4">Dashboard</div>; }
+export default function Dashboard() { return <h1>Dashboard</h1>; }
