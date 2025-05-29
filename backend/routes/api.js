@@ -36,4 +36,6 @@ router.post("/queue/:id/retry", (req, res) => {
     `INSERT INTO jobs (id, folder, status) VALUES (?, ?, 'queued')`
   ).run(id, old.folder);
   res.json({ id, folder: old.folder, status: "queued" });
+
+export default router;
 });
