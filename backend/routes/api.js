@@ -1,5 +1,5 @@
 import express from "express";
-import { createDbConnection } from "../backend/db.js";  // updated path to backend/db.js
+import { createDbConnection } from "../db/db.js";  // corrected path to db.js
 import { v4 as uuidv4 } from "uuid";
 
 // Initialize database connection via factory
