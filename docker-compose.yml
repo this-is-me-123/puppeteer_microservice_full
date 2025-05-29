@@ -1,15 +1,15 @@
-version: '3'
-
+version: '3.8'
 services:
   backend:
     build: ./backend
-    volumes:
-      - ./backend/logs.db:/app/logs.db
     ports:
       - "3001:3001"
-
+    env_file:
+      - ./backend/.env
+    volumes:
+      - ./backend/logs.db:/app/logs.db
+      - ./backend/debug_logs:/app/debug_logs
   frontend:
     build: ./frontend
     ports:
       - "3000:80"
-# test
