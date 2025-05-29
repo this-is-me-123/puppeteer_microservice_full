@@ -1,7 +1,9 @@
-
 import express from "express";
-import db from "../db.js";                // adjust path as needed
+import { createDbConnection } from "../backend/db.js";  // updated path to backend/db.js
 import { v4 as uuidv4 } from "uuid";
+
+// Initialize database connection via factory
+const db = createDbConnection();
 
 const router = express.Router();
 
@@ -61,7 +63,6 @@ function enqueueJob(folder) {
 router.post("/queue", (req, res) => {
   let { folder } = req.body;
 
-  // Basic type and presence validation
   if (typeof folder !== 'string') {
     return res.status(400).json({ error: "Folder must be a string" });
   }
@@ -70,7 +71,6 @@ router.post("/queue", (req, res) => {
     return res.status(400).json({ error: "Folder cannot be empty" });
   }
 
-  // Sanitization: allow only alphanumeric, dashes, underscores, and slashes
   const sanitized = folder.replace(/[^a-zA-Z0-9_\-\/]/g, '');
   if (sanitized !== folder) {
     return res.status(400).json({ error: "Folder contains invalid characters" });
