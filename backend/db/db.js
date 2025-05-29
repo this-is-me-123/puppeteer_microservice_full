@@ -1,110 +1,99 @@
-import Database from "better-sqlite3";
-import path, { dirname } from "path";
-import { fileURLToPath } from "url";
+import express from "express";
+import {
+  createDbConnection,
+  runAsync,
+  getAsync,
+  allAsync,
+  closeDbConnection
+} from "../db/db.js";
+import { v4 as uuidv4 } from "uuid";
 
-// Derive __dirname from import.meta.url
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
+const router = express.Router();
+// Use a single DB connection
+const db = createDbConnection();
 
-// Maximum number of cached connections
-const MAX_CACHE_SIZE = 10;
-// Cache for database connections, keyed by file path, storing insertion order for LRU eviction
-const connectionCache = new Map();
-
-/**
- * Factory to create or reuse a Better-SQLite3 connection.
- * Implements an LRU cache with a max size to avoid unbounded growth.
- * Merges environment-based defaults with provided options for flexibility.
- * Allows overriding the default database file via the DB_FILE environment variable.
- *
- * Throws an error if the database cannot be opened. Callers should handle exceptions
- * to avoid unhandled runtime errors and to implement clean shutdown or retries.
- *
- * @param {string} [customPath] - Optional absolute path to the SQLite file.
- * @param {object} [options] - Optional Better-SQLite3 constructor options.
- * @throws {Error} If opening the database fails.
- * @returns {Database} - A Database instance (cached or new).
- */
-export function createDbConnection(customPath, options) {
-  // Determine the SQLite file path, allowing environment override
-  const defaultDbFile = process.env.DB_FILE
-    ? path.resolve(__dirname, process.env.DB_FILE)
-    : path.resolve(__dirname, "jobs.sqlite");
-  const dbFile = customPath || defaultDbFile;
-
-  // If cached, move to end to mark as recently used
-  if (connectionCache.has(dbFile)) {
-    const dbCached = connectionCache.get(dbFile);
-    connectionCache.delete(dbFile);
-    connectionCache.set(dbFile, dbCached);
-    return dbCached;
-  }
-
-  // Merge environment-based defaults with provided options
-  const defaultOptions = process.env.DB_LOG_LEVEL === 'verbose'
-    ? { verbose: console.log }
-    : {};
-  const mergedOptions = { ...defaultOptions, ...(options || {}) };
-
-  // Create a new connection, throwing on failure
-  let db;
+// List all jobs with pagination
+router.get("/queue", async (req, res, next) => {
   try {
-    db = new Database(dbFile, mergedOptions);
+    const limit = Math.min(parseInt(req.query.limit, 10) || 50, 100);
+    const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
+    const offset = (page - 1) * limit;
+
+    const { count: total } = await getAsync(
+      db,
+      "SELECT COUNT(*) as count FROM jobs"
+    );
+    const data = await allAsync(
+      db,
+      `SELECT id, folder, status, created_at, updated_at
+       FROM jobs ORDER BY created_at DESC
+       LIMIT ? OFFSET ?`,
+      [limit, offset]
+    );
+
+    res.json({ page, limit, total, totalPages: Math.ceil(total / limit), data });
   } catch (err) {
-    console.error(`Failed to initialize database at ${dbFile}:`, err);
-    throw new Error(`Database initialization error: ${err.message}`);
+    next(err);
   }
+});
 
-  // Evict least-recently-used connection if cache limit exceeded
-  if (connectionCache.size >= MAX_CACHE_SIZE) {
-    const oldestKey = connectionCache.keys().next().value;
-    const oldestDb = connectionCache.get(oldestKey);
+// Get single job details
+router.get("/queue/:id", async (req, res, next) => {
+  try {
+    const job = await getAsync(db, "SELECT * FROM jobs WHERE id = ?", [req.params.id]);
+    if (!job) return res.status(404).json({ error: "Not found" });
     try {
-      oldestDb.close();
-    } catch (closeErr) {
-      console.error(`Error closing database connection for ${oldestKey}:`, closeErr);
+      job.result = job.result ? JSON.parse(job.result) : {};
+    } catch (_) {
+      job.result = {};
     }
-    connectionCache.delete(oldestKey);
+    res.json(job);
+  } catch (err) {
+    next(err);
   }
+});
 
-  connectionCache.set(dbFile, db);
-  return db;
-}
-
-/**
- * Close a specific database connection or all if no path is provided.
- * @param {string} [customPath] - Optional path of the SQLite file to close. Defaults to all.
- */
-export function closeDbConnection(customPath) {
-  if (customPath) {
-    const db = connectionCache.get(customPath);
-    if (db) {
-      try {
-        db.close();
-      } catch (err) {
-        console.error(`Error closing database for ${customPath}:`, err);
-      }
-      connectionCache.delete(customPath);
-    }
-  } else {
-    // Close all connections
-    for (const [key, db] of connectionCache.entries()) {
-      try {
-        db.close();
-      } catch (err) {
-        console.error(`Error closing database for ${key}:`, err);
-      }
-    }
-    connectionCache.clear();
+// Enqueue a new job
+router.post("/queue", async (req, res, next) => {
+  try {
+    const { folder } = req.body;
+    const id = uuidv4();
+    await runAsync(
+      db,
+      "INSERT INTO jobs (id, folder, status) VALUES (?, ?, 'queued')",
+      [id, folder]
+    );
+    res.status(201).json({ id, folder, status: "queued" });
+  } catch (err) {
+    next(err);
   }
-}
+});
 
-// Optional: Close all on process exit
+// Retry a failed job
+router.post("/queue/:id/retry", async (req, res, next) => {
+  try {
+    const old = await getAsync(
+      db,
+      "SELECT folder FROM jobs WHERE id = ? AND status = 'failed'",
+      [req.params.id]
+    );
+    if (!old) return res.status(404).json({ error: "Not found or not failed" });
+    const id = uuidv4();
+    await runAsync(
+      db,
+      "INSERT INTO jobs (id, folder, status) VALUES (?, ?, 'queued')",
+      [id, old.folder]
+    );
+    res.json({ id, folder: old.folder, status: "queued" });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Example teardown hook
 process.on('SIGINT', () => {
-  closeDbConnection();
+  closeDbConnection(db);
   process.exit();
 });
-process.on('SIGTERM', () => {
-  closeDbConnection();
-  process.exit();
-});
+
+export default router;
