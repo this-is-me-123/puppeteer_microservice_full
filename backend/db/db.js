@@ -12,7 +12,7 @@ const defaultDbFile = process.env.DB_FILE
   ? path.resolve(__dirname, process.env.DB_FILE)
   : path.resolve(__dirname, "jobs.sqlite");
 
-let SQL;       // sql.js module
+let SQL;       // SQL.js module
 let dbInstance;
 
 /**
@@ -24,9 +24,7 @@ let dbInstance;
 export async function createDbConnection(customPath) {
   const dbFile = customPath || defaultDbFile;
   if (!SQL) {
-    SQL = await initSqlJs({
-      locateFile: file => `./node_modules/sql.js/dist/${file}`
-    });
+    SQL = await initSqlJs({ locateFile: file => `./node_modules/sql.js/dist/${file}` });
   }
 
   let filebuffer = new Uint8Array();
