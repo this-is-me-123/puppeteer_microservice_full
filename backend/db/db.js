@@ -1,99 +1,89 @@
-import express from "express";
-import {
-  createDbConnection,
-  runAsync,
-  getAsync,
-  allAsync,
-  closeDbConnection
-} from "../db/db.js";
-import { v4 as uuidv4 } from "uuid";
+import sqlite3 from "sqlite3";
+import path, { dirname } from "path";
+import { fileURLToPath } from "url";
 
-const router = express.Router();
-// Use a single DB connection
-const db = createDbConnection();
+// Derive __dirname from import.meta.url
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
 
-// List all jobs with pagination
-router.get("/queue", async (req, res, next) => {
-  try {
-    const limit = Math.min(parseInt(req.query.limit, 10) || 50, 100);
-    const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
-    const offset = (page - 1) * limit;
+// Default database file path
+const defaultDbFile = process.env.DB_FILE
+  ? path.resolve(__dirname, process.env.DB_FILE)
+  : path.resolve(__dirname, "jobs.sqlite");
 
-    const { count: total } = await getAsync(
-      db,
-      "SELECT COUNT(*) as count FROM jobs"
-    );
-    const data = await allAsync(
-      db,
-      `SELECT id, folder, status, created_at, updated_at
-       FROM jobs ORDER BY created_at DESC
-       LIMIT ? OFFSET ?`,
-      [limit, offset]
-    );
-
-    res.json({ page, limit, total, totalPages: Math.ceil(total / limit), data });
-  } catch (err) {
-    next(err);
-  }
-});
-
-// Get single job details
-router.get("/queue/:id", async (req, res, next) => {
-  try {
-    const job = await getAsync(db, "SELECT * FROM jobs WHERE id = ?", [req.params.id]);
-    if (!job) return res.status(404).json({ error: "Not found" });
-    try {
-      job.result = job.result ? JSON.parse(job.result) : {};
-    } catch (_) {
-      job.result = {};
+/**
+ * Opens a SQLite3 database connection.
+ * @param {string} [customPath] - Optional path to the SQLite file.
+ * @returns {sqlite3.Database} - A Database instance.
+ * @throws {Error} If opening the database fails.
+ */
+export function createDbConnection(customPath) {
+  const dbFile = customPath || defaultDbFile;
+  const db = new sqlite3.Database(dbFile, (err) => {
+    if (err) {
+      console.error(`Failed to open database at ${dbFile}:`, err);
+      throw err;
     }
-    res.json(job);
-  } catch (err) {
-    next(err);
+  });
+  return db;
+}
+
+/**
+ * Close a SQLite3 database connection.
+ * @param {sqlite3.Database} db - The database instance to close.
+ */
+export function closeDbConnection(db) {
+  if (db) {
+    db.close((err) => {
+      if (err) console.error("Error closing the database:", err);
+    });
   }
-});
+}
 
-// Enqueue a new job
-router.post("/queue", async (req, res, next) => {
-  try {
-    const { folder } = req.body;
-    const id = uuidv4();
-    await runAsync(
-      db,
-      "INSERT INTO jobs (id, folder, status) VALUES (?, ?, 'queued')",
-      [id, folder]
-    );
-    res.status(201).json({ id, folder, status: "queued" });
-  } catch (err) {
-    next(err);
-  }
-});
+/**
+ * Runs a SQL command (INSERT/UPDATE/DELETE) and returns a promise.
+ * @param {sqlite3.Database} db - The database instance.
+ * @param {string} sql - The SQL statement.
+ * @param {any[]} [params] - Optional parameters for the statement.
+ * @returns {Promise<sqlite3.RunResult>} Resolves with result metadata.
+ */
+export function runAsync(db, sql, params = []) {
+  return new Promise((resolve, reject) => {
+    db.run(sql, params, function (err) {
+      if (err) return reject(err);
+      resolve(this); // contains lastID, changes
+    });
+  });
+}
 
-// Retry a failed job
-router.post("/queue/:id/retry", async (req, res, next) => {
-  try {
-    const old = await getAsync(
-      db,
-      "SELECT folder FROM jobs WHERE id = ? AND status = 'failed'",
-      [req.params.id]
-    );
-    if (!old) return res.status(404).json({ error: "Not found or not failed" });
-    const id = uuidv4();
-    await runAsync(
-      db,
-      "INSERT INTO jobs (id, folder, status) VALUES (?, ?, 'queued')",
-      [id, old.folder]
-    );
-    res.json({ id, folder: old.folder, status: "queued" });
-  } catch (err) {
-    next(err);
-  }
-});
+/**
+ * Retrieves a single row and returns a promise.
+ * @param {sqlite3.Database} db - The database instance.
+ * @param {string} sql - The SQL statement.
+ * @param {any[]} [params] - Optional parameters for the statement.
+ * @returns {Promise<any>} Resolves with the row or undefined.
+ */
+export function getAsync(db, sql, params = []) {
+  return new Promise((resolve, reject) => {
+    db.get(sql, params, (err, row) => {
+      if (err) return reject(err);
+      resolve(row);
+    });
+  });
+}
 
-// Example teardown hook
-process.on('SIGINT', () => {
-  closeDbConnection(db);
-  process.exit();
-});
-
-export default router;
+/**
+ * Retrieves all matching rows and returns a promise.
+ * @param {sqlite3.Database} db - The database instance.
+ * @param {string} sql - The SQL statement.
+ * @param {any[]} [params] - Optional parameters for the statement.
+ * @returns {Promise<any[]>} Resolves with an array of rows.
+ */
+export function allAsync(db, sql, params = []) {
+  return new Promise((resolve, reject) => {
+    db.all(sql, params, (err, rows) => {
+      if (err) return reject(err);
+      resolve(rows);
+    });
+  });
+}
