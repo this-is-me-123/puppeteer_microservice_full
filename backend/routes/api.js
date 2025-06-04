@@ -23,6 +23,11 @@ router.get('/logs', (req, res) => {
   res.json(rows);
 });
 
+// Health check endpoint
+router.get('/health', (req, res) => {
+  res.status(200).json({ status: 'UP', message: 'Backend is healthy' });
+});
+
 // ... existing auth and user routes
 
 export default router;
