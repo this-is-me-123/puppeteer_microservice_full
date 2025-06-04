@@ -7,7 +7,7 @@ RUN apt-get update && \
 
 WORKDIR /app
 COPY package*.json ./
-RUN npm install
+RUN npm install --build-from-source=better-sqlite3
 EXPOSE 3001
 COPY . .
 CMD ["npm", "start"]
